@@ -7,7 +7,7 @@ const OUTPUT_FILE = 'output.txt';
 const BLOCK_HEIGHT = 1;
 const MINER_ADDRESS = 'miner_address';
 const BLOCK_REWARD = 6.25 
-const MAX_BLOCK_SIZE = 1000000; 
+const MAX_BLOCK_SIZE = 1000000; // 1 MB
 
 function calculateHash(block) {
   const blockString = JSON.stringify(block);
@@ -37,18 +37,16 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 }
 
 function isValidTransaction(transaction) {
-  // Checking if the transaction has a valid structure
+  // Check if the transaction has a valid structure
   if (!transaction.txid || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
     return false;
   }
-
-  // Checking if the transaction inputs and outputs are valid
+  // Check if the transaction inputs and outputs are valid
   const totalInput = transaction.vin.reduce((sum, input) => sum + (input.value || 0), 0);
   const totalOutput = transaction.vout.reduce((sum, output) => sum + output.value, 0);
   if (totalInput !== totalOutput) {
     return false;
   }
-
   return true;
 }
 
@@ -61,13 +59,11 @@ function calculateTransactionFee(transaction) {
 function mineBlock(transactions, blockHeight, minerAddress) {
   const coinbaseTransaction = createCoinbaseTransaction(blockHeight, minerAddress);
   const validTransactions = transactions.filter(isValidTransaction);
-
   // Calculating total fee collected (including coinbase transaction)
   const totalFee = validTransactions.reduce((sum, tx) => sum + calculateTransactionFee(tx), 0) + BLOCK_REWARD;
 
   let blockTransactions = [coinbaseTransaction];
   let blockSize = Buffer.from(JSON.stringify(coinbaseTransaction), 'utf8').length;
-
   for (const tx of validTransactions) {
     const txSize = Buffer.from(JSON.stringify(tx), 'utf8').length;
     if (blockSize + txSize <= MAX_BLOCK_SIZE) {
@@ -78,27 +74,49 @@ function mineBlock(transactions, blockHeight, minerAddress) {
     }
   }
 
-  const block = {
-    height: blockHeight,
-    transactions: blockTransactions,
-    previousBlockHash: '0'.repeat(64),
-    timestamp: Math.floor(Date.now() / 1000),
-    nonce: 0,
-  };
-
+  // Create the block header
+  const merkleRoot = calculateMerkleRoot(blockTransactions.map(tx => tx.txid));
+  const timestamp = Math.floor(Date.now() / 1000);
+  let nonce = 0;
+  let blockHeader = '';
+  let blockHash = '';
   while (true) {
-    const blockHash = calculateHash(block);
+    blockHeader = calculateBlockHeader(blockHeight, merkleRoot, timestamp, nonce);
+    blockHash = calculateHash(blockHeader);
     if (blockHash < DIFFICULTY_TARGET) {
-      return {
-        blockHeader: blockHash,
-        coinbaseTransaction: JSON.stringify(coinbaseTransaction),
-        transactionIds: blockTransactions.map((tx) => tx.txid),
-        totalFee: totalFee,
-        blockSize: blockSize,
-      };
+      break;
     }
-    block.nonce++;
+    nonce++;
   }
+
+  return {
+    blockHeader,
+    coinbaseTransaction: JSON.stringify(coinbaseTransaction),
+    transactionIds: blockTransactions.map((tx) => tx.txid),
+    totalFee,
+    blockSize,
+  };
+}
+
+function calculateMerkleRoot(transactionIds) {
+  if (transactionIds.length === 0) {
+    return '0'.repeat(64);
+  }
+  if (transactionIds.length === 1) {
+    return transactionIds[0];
+  }
+
+  const combinedIds = [];
+  for (let i = 0; i < transactionIds.length; i += 2) {
+    const leftId = transactionIds[i];
+    const rightId = i + 1 < transactionIds.length ? transactionIds[i + 1] : leftId;
+    combinedIds.push(calculateHash(leftId + rightId));
+  }
+  return calculateMerkleRoot(combinedIds);
+}
+
+function calculateBlockHeader(blockHeight, merkleRoot, timestamp, nonce) {
+  return `${blockHeight}${merkleRoot}${timestamp}${DIFFICULTY_TARGET}${nonce}`;
 }
 
 function readTransactionsFromMempool() {
@@ -113,11 +131,13 @@ function readTransactionsFromMempool() {
 function main() {
   const transactions = readTransactionsFromMempool();
   const minedBlock = mineBlock(transactions, BLOCK_HEIGHT, MINER_ADDRESS);
-
   const outputContent = `${minedBlock.blockHeader}\n${minedBlock.coinbaseTransaction}\n${minedBlock.transactionIds.join('\n')}`;
   fs.writeFileSync(OUTPUT_FILE, outputContent);
-
   console.log('Block mined successfully!');
+  console.log(`Total fee collected: ${minedBlock.totalFee}`);
+  console.log(`Block size: ${minedBlock.blockSize} bytes`);
+  console.log(`Available block space: ${MAX_BLOCK_SIZE} bytes`);
+  console.log(`Block space utilized: ${((minedBlock.blockSize / MAX_BLOCK_SIZE) * 100).toFixed(2)}%`);
 }
 
 main();
