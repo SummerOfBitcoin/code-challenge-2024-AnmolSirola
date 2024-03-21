@@ -57,13 +57,21 @@ function calculateTransactionFee(transaction) {
 function mineBlock(transactions, blockHeight, minerAddress) {
   const coinbaseTransaction = createCoinbaseTransaction(blockHeight, minerAddress);
   const validTransactions = transactions.filter(isValidTransaction);
-  const blockTransactions = [coinbaseTransaction, ...validTransactions];
-
-  let blockSize = JSON.stringify(blockTransactions).length;
-  while (blockSize > MAX_BLOCK_SIZE) {
-    validTransactions.pop();
-    blockTransactions.pop();
-    blockSize = JSON.stringify(blockTransactions).length;
+  
+  // Calculate total fee collected (including coinbase transaction)
+  const totalFee = validTransactions.reduce((sum, tx) => sum + calculateTransactionFee(tx), 0) + BLOCK_REWARD;
+  
+  let blockTransactions = [coinbaseTransaction];
+  let blockSize = JSON.stringify(coinbaseTransaction).length;
+  
+  for (const tx of validTransactions) {
+    const txSize = JSON.stringify(tx).length;
+    if (blockSize + txSize <= MAX_BLOCK_SIZE) {
+      blockTransactions.push(tx);
+      blockSize += txSize;
+    } else {
+      break;
+    }
   }
 
   const block = {
@@ -81,6 +89,8 @@ function mineBlock(transactions, blockHeight, minerAddress) {
         blockHeader: blockHash,
         coinbaseTransaction: JSON.stringify(coinbaseTransaction),
         transactionIds: blockTransactions.map((tx) => tx.txid),
+        totalFee: totalFee,
+        blockSize: blockSize,
       };
     }
     block.nonce++;
