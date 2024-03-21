@@ -1,15 +1,13 @@
-
-const MEMPOOL_PATH = './mempool';
 const fs = require('fs');
 const crypto = require('crypto');
 
-
+const MEMPOOL_PATH = './mempool';
 const DIFFICULTY_TARGET = '0000ffff00000000000000000000000000000000000000000000000000000000';
 const OUTPUT_FILE = 'output.txt';
 const BLOCK_HEIGHT = 1;
 const MINER_ADDRESS = 'miner_address';
-const BLOCK_REWARD = 50;
-const MAX_BLOCK_SIZE = 1000000; // 1 MB
+const BLOCK_REWARD = 6.25 
+const MAX_BLOCK_SIZE = 1000000; 
 
 function calculateHash(block) {
   const blockString = JSON.stringify(block);
@@ -19,7 +17,14 @@ function calculateHash(block) {
 function createCoinbaseTransaction(blockHeight, minerAddress) {
   return {
     txid: crypto.randomBytes(32).toString('hex'),
-    vin: [],
+    vin: [
+      {
+        txid: '0'.repeat(64),
+        vout: 0xffffffff,
+        scriptSig: '',
+        sequence: 0xffffffff,
+      },
+    ],
     vout: [
       {
         value: BLOCK_REWARD,
@@ -32,24 +37,23 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 }
 
 function isValidTransaction(transaction) {
-  // Check if the transaction has a valid structure
-  if (!transaction.txid || !transaction.vin || !transaction.vout) {
+  // Checking if the transaction has a valid structure
+  if (!transaction.txid || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
     return false;
   }
 
-  // Check if the transaction inputs and outputs are valid
-  const totalInput = transaction.vin.reduce((sum, input) => sum + input.value, 0);
+  // Checking if the transaction inputs and outputs are valid
+  const totalInput = transaction.vin.reduce((sum, input) => sum + (input.value || 0), 0);
   const totalOutput = transaction.vout.reduce((sum, output) => sum + output.value, 0);
   if (totalInput !== totalOutput) {
     return false;
   }
 
-
   return true;
 }
 
 function calculateTransactionFee(transaction) {
-  const totalInput = transaction.vin.reduce((sum, input) => sum + input.value, 0);
+  const totalInput = transaction.vin.reduce((sum, input) => sum + (input.value || 0), 0);
   const totalOutput = transaction.vout.reduce((sum, output) => sum + output.value, 0);
   return totalInput - totalOutput;
 }
@@ -57,15 +61,15 @@ function calculateTransactionFee(transaction) {
 function mineBlock(transactions, blockHeight, minerAddress) {
   const coinbaseTransaction = createCoinbaseTransaction(blockHeight, minerAddress);
   const validTransactions = transactions.filter(isValidTransaction);
-  
-  // Calculate total fee collected (including coinbase transaction)
+
+  // Calculating total fee collected (including coinbase transaction)
   const totalFee = validTransactions.reduce((sum, tx) => sum + calculateTransactionFee(tx), 0) + BLOCK_REWARD;
-  
+
   let blockTransactions = [coinbaseTransaction];
-  let blockSize = JSON.stringify(coinbaseTransaction).length;
-  
+  let blockSize = Buffer.from(JSON.stringify(coinbaseTransaction), 'utf8').length;
+
   for (const tx of validTransactions) {
-    const txSize = JSON.stringify(tx).length;
+    const txSize = Buffer.from(JSON.stringify(tx), 'utf8').length;
     if (blockSize + txSize <= MAX_BLOCK_SIZE) {
       blockTransactions.push(tx);
       blockSize += txSize;
@@ -77,8 +81,8 @@ function mineBlock(transactions, blockHeight, minerAddress) {
   const block = {
     height: blockHeight,
     transactions: blockTransactions,
-    previousBlockHash: '',
-    timestamp: Date.now(),
+    previousBlockHash: '0'.repeat(64),
+    timestamp: Math.floor(Date.now() / 1000),
     nonce: 0,
   };
 
