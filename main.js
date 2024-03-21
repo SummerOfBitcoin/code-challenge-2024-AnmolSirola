@@ -6,12 +6,11 @@ const DIFFICULTY_TARGET = '0000ffff000000000000000000000000000000000000000000000
 const OUTPUT_FILE = 'output.txt';
 const BLOCK_HEIGHT = 1;
 const MINER_ADDRESS = 'miner_address';
-const BLOCK_REWARD = 6.25 
+const BLOCK_REWARD = 6.25;
 const MAX_BLOCK_SIZE = 1000000; // 1 MB
 
-function calculateHash(block) {
-  const blockString = JSON.stringify(block);
-  return crypto.createHash('sha256').update(blockString).digest('hex');
+function calculateHash(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
 }
 
 function createCoinbaseTransaction(blockHeight, minerAddress) {
@@ -116,7 +115,12 @@ function calculateMerkleRoot(transactionIds) {
 }
 
 function calculateBlockHeader(blockHeight, merkleRoot, timestamp, nonce) {
-  return `${blockHeight}${merkleRoot}${timestamp}${DIFFICULTY_TARGET}${nonce}`;
+  // Ensure each field has a fixed length for consistent header length
+  const formattedBlockHeight = blockHeight.toString().padStart(8, '0');
+  const formattedTimestamp = timestamp.toString().padStart(16, '0');
+  const formattedNonce = nonce.toString().padStart(16, '0');
+
+  return `${formattedBlockHeight}${merkleRoot}${formattedTimestamp}${DIFFICULTY_TARGET}${formattedNonce}`;
 }
 
 function readTransactionsFromMempool() {
