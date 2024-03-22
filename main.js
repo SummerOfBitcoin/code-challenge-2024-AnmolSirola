@@ -15,20 +15,27 @@ function readTransactionsFromMempool() {
   return transactions;
 }
 
+function verifySignature(input) {
+  const { scriptSig, txid, vout } = input;
+  const { scriptPubKey } = vout;
+  const message = Buffer.from(txid, 'hex');
+  const signature = Buffer.from(scriptSig, 'hex');
+  const publicKey = Buffer.from(scriptPubKey, 'hex');
+  return secp256k1.ecdsaVerify(signature, message, publicKey);
+}
+
 function validateTransaction(transaction) {
-  // Check transaction structure
+  
   if (!transaction.version || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
     return false;
   }
 
-  // Check transaction inputs
   for (const input of transaction.vin) {
     if (!input.txid || input.vout === undefined || !input.scriptSig || !input.sequence) {
       return false;
     }
   }
 
-  // Check transaction outputs
   for (const output of transaction.vout) {
     if (output.value === undefined || !output.scriptPubKey) {
       return false;
@@ -65,7 +72,7 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
         value: BLOCK_REWARD,
         scriptPubKey: {
           asm: `OP_DUP OP_HASH160 ${minerAddress} OP_EQUALVERIFY OP_CHECKSIG`,
-          hex: '',
+          hex: `76a914${minerAddress}88ac`,
           address: minerAddress,
         },
       },
@@ -76,7 +83,63 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 }
 
 function serializeTransaction(transaction) {
-  return JSON.stringify(transaction);
+  const inputSize = 32 + 4; 
+  const outputSize = 8; 
+
+  const bufferSize = 4 + 1 + transaction.vin.length * inputSize + 1 + transaction.vout.length * (outputSize + 1);
+  const buffer = Buffer.alloc(bufferSize);
+  let offset = 0;
+
+  
+  buffer.writeUInt32LE(transaction.version, offset);
+  offset += 4;
+
+  
+  buffer.writeUInt8(transaction.vin.length, offset);
+  offset += 1;
+
+  
+  for (const input of transaction.vin) {
+    if (input.txid) {
+      Buffer.from(input.txid, 'hex').copy(buffer, offset);
+      offset += 32;
+    } else {
+      buffer.fill(0, offset, offset + 32); 
+      offset += 32;
+    }
+
+    if (input.vout !== undefined) {
+      buffer.writeUInt32LE(input.vout, offset);
+      offset += 4;
+    } else {
+      buffer.writeUInt32LE(0xffffffff, offset); 
+      offset += 4;
+    }
+  }
+
+  
+  buffer.writeUInt8(transaction.vout.length, offset);
+  offset += 1;
+
+ 
+  for (const output of transaction.vout) {
+    if (output.value !== undefined) {
+      buffer.writeBigInt64LE(BigInt(Math.floor(output.value * 1e8)), offset);
+      offset += 8;
+    } else {
+      buffer.writeBigInt64LE(BigInt(0), offset); 
+      offset += 8;
+    }
+
+   
+    const scriptPubKey = Buffer.from(output.scriptPubKey.hex, 'hex');
+    buffer.writeUInt8(scriptPubKey.length, offset);
+    offset += 1;
+    scriptPubKey.copy(buffer, offset);
+    offset += scriptPubKey.length;
+  }
+
+  return buffer.slice(0, offset).toString('hex');
 }
 
 function createBlockHeader(version, previousBlockHash, merkleRoot, timestamp, bits, nonce) {
@@ -114,7 +177,7 @@ function mineBlock(blockHeader, difficulty) {
   let nonce = 0;
   let hash = calculateBlockHash(blockHeader);
 
-  while (hash >= difficulty) {
+  while (hash > difficulty) {
     nonce++;
     blockHeader.nonce = nonce;
     hash = calculateBlockHash(blockHeader);
@@ -155,6 +218,10 @@ const validTransactions = transactions.filter(validateTransaction);
 
 const coinbaseTransaction = createCoinbaseTransaction(1, '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
 coinbaseTransaction.txid = crypto.createHash('sha256').update(serializeTransaction(coinbaseTransaction)).digest('hex');
+
+validTransactions.forEach(tx => {
+  tx.txid = crypto.createHash('sha256').update(serializeTransaction(tx)).digest('hex');
+});
 
 const merkleRoot = calculateMerkleRoot([coinbaseTransaction, ...validTransactions]);
 const blockHeader = createBlockHeader(1, '0000000000000000000000000000000000000000000000000000000000000000', merkleRoot, Math.floor(Date.now() / 1000), DIFFICULTY_TARGET, 0);
