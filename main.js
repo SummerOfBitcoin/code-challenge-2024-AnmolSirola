@@ -16,26 +16,27 @@ function readTransactionsFromMempool() {
 }
 
 function validateTransaction(transaction) {
-  
+  // Check transaction structure
   if (!transaction.version || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
     return false;
   }
 
   // Check transaction inputs
   for (const input of transaction.vin) {
-    if (!input.txid || !input.vout || !input.scriptSig || !input.sequence) {
+    if (!input.txid || input.vout === undefined || !input.scriptSig || !input.sequence) {
       return false;
     }
   }
 
   // Check transaction outputs
   for (const output of transaction.vout) {
-    if (!output.value || !output.scriptPubKey) {
+    if (output.value === undefined || !output.scriptPubKey) {
       return false;
     }
   }
 
   // Verify transaction signatures
+  // (Placeholder implementation, you need to add actual signature verification logic)
   for (const input of transaction.vin) {
     if (!verifySignature(input)) {
       return false;
@@ -46,21 +47,21 @@ function validateTransaction(transaction) {
 }
 
 function createCoinbaseTransaction(blockHeight, minerAddress) {
-  const bufferWriter = Buffer.alloc(8);
-  bufferWriter.writeInt32LE(blockHeight, 0);
+  const buffer = Buffer.alloc(8);
+  buffer.writeInt32LE(blockHeight, 0);
 
   const transaction = {
     version: 1,
     vin: [
       {
-        coinbase: bufferWriter.toString('hex'),
+        coinbase: buffer.toString('hex'),
         sequence: 0xffffffff,
       },
     ],
     vout: [
       {
         value: BLOCK_REWARD,
-        scriptPubKey: `OP_DUP OP_HASH160 ${minerAddress} OP_EQUALVERIFY OP_CHECKSIG`,
+        scriptPubKey: minerAddress,
       },
     ],
   };
@@ -72,7 +73,7 @@ function serializeCoinbaseTransaction(coinbaseTransaction) {
   const buffer = Buffer.alloc(1000);
   let offset = 0;
 
-
+  // Version
   buffer.writeInt32LE(coinbaseTransaction.version, offset);
   offset += 4;
 
@@ -89,7 +90,7 @@ function serializeCoinbaseTransaction(coinbaseTransaction) {
     coinbaseData.copy(buffer, offset);
     offset += coinbaseData.length;
 
-    
+    // Sequence
     buffer.writeUInt32LE(input.sequence, offset);
     offset += 4;
   }
@@ -100,12 +101,13 @@ function serializeCoinbaseTransaction(coinbaseTransaction) {
 
   // Outputs
   for (const output of coinbaseTransaction.vout) {
-    
-    buffer.writeBigInt64LE(BigInt(output.value * 1e8), offset);
+    // Value
+    const value = Math.floor(output.value * 1e8);
+    buffer.writeBigInt64LE(BigInt(value), offset);
     offset += 8;
 
     // Script length
-    const scriptPubKey = Buffer.from(output.scriptPubKey, 'ascii');
+    const scriptPubKey = Buffer.from(output.scriptPubKey, 'hex');
     buffer.writeUInt8(scriptPubKey.length, offset);
     offset += 1;
 
@@ -148,7 +150,7 @@ function serializeBlockHeader(blockHeader) {
 
 function calculateBlockHash(blockHeader) {
   const serializedHeader = serializeBlockHeader(blockHeader);
-  const hash = crypto.createHash('sha256').update(serializedHeader).digest('hex');
+  const hash = crypto.createHash('sha256').update(serializedHeader, 'hex').digest('hex');
   return hash;
 }
 
@@ -166,16 +168,21 @@ function mineBlock(blockHeader, difficulty) {
 }
 
 function calculateMerkleRoot(transactions) {
-  if (transactions.length === 0) {
-    return '0'.repeat(64);
-  }
-  if (transactions.length === 1) {
-    return transactions[0].txid;
+  const txids = transactions.map(tx => tx.txid);
+
+  while (txids.length > 1) {
+    const newTxids = [];
+    for (let i = 0; i < txids.length; i += 2) {
+      const left = txids[i];
+      const right = i + 1 < txids.length ? txids[i + 1] : left;
+      const combined = left + right;
+      const hash = crypto.createHash('sha256').update(combined, 'hex').digest('hex');
+      newTxids.push(hash);
+    }
+    txids = newTxids;
   }
 
-  const concatenatedTxids = transactions.map(tx => tx.txid).join('');
-  const hash = crypto.createHash('sha256').update(concatenatedTxids).digest('hex');
-  return hash;
+  return txids[0];
 }
 
 function writeTxidsToFile(blockHeader, coinbaseTransaction, txids) {
@@ -190,8 +197,8 @@ function writeTxidsToFile(blockHeader, coinbaseTransaction, txids) {
 const transactions = readTransactionsFromMempool();
 const validTransactions = transactions.filter(validateTransaction);
 
-const coinbaseTransaction = createCoinbaseTransaction(1, 'minerAddress');
-coinbaseTransaction.txid = crypto.createHash('sha256').update(serializeCoinbaseTransaction(coinbaseTransaction)).digest('hex');
+const coinbaseTransaction = createCoinbaseTransaction(1, '0'.repeat(40));
+coinbaseTransaction.txid = crypto.createHash('sha256').update(serializeCoinbaseTransaction(coinbaseTransaction), 'hex').digest('hex');
 
 const merkleRoot = calculateMerkleRoot([coinbaseTransaction, ...validTransactions]);
 const blockHeader = createBlockHeader(1, '0'.repeat(64), merkleRoot, Math.floor(Date.now() / 1000), DIFFICULTY_TARGET, 0);
