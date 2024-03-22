@@ -1,150 +1,130 @@
 const fs = require('fs');
 const crypto = require('crypto');
+const secp256k1 = require('secp256k1');
 
-const MEMPOOL_PATH = './mempool';
 const DIFFICULTY_TARGET = '0000ffff00000000000000000000000000000000000000000000000000000000';
-const OUTPUT_FILE = 'output.txt';
-const BLOCK_HEIGHT = 1;
-const MINER_ADDRESS = 'miner_address';
-const BLOCK_REWARD = 6.25 
-const MAX_BLOCK_SIZE = 1000000; // 1 MB
+const BLOCK_REWARD = 6;
 
-function calculateHash(block) {
-  const blockString = JSON.stringify(block);
-  return crypto.createHash('sha256').update(blockString).digest('hex');
+function readTransactionsFromMempool() {
+  const mempoolDir = './mempool';
+  const files = fs.readdirSync(mempoolDir);
+  const transactions = files.map(file => {
+    const content = fs.readFileSync(`${mempoolDir}/${file}`, 'utf8');
+    return JSON.parse(content);
+  });
+  return transactions;
+}
+
+function validateTransaction(transaction) {
+  // Check transaction structure
+  if (!transaction.version || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
+    return false;
+  }
+
+  // Check transaction inputs
+  for (const input of transaction.vin) {
+    if (!input.txid || !input.vout || !input.scriptSig || !input.sequence) {
+      return false;
+    }
+  }
+
+  // Check transaction outputs
+  for (const output of transaction.vout) {
+    if (!output.value || !output.scriptPubKey) {
+      return false;
+    }
+  }
+
+  // Verify transaction signatures
+  // (Placeholder implementation, you need to add actual signature verification logic)
+  for (const input of transaction.vin) {
+    if (!verifySignature(input)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function createCoinbaseTransaction(blockHeight, minerAddress) {
-  return {
-    txid: crypto.randomBytes(32).toString('hex'),
+  const bufferWriter = Buffer.alloc(8);
+  bufferWriter.writeInt32LE(blockHeight, 0);
+  
+  const transaction = {
+    version: 1,
     vin: [
       {
-        txid: '0'.repeat(64),
-        vout: 0xffffffff,
-        scriptSig: '',
+        coinbase: bufferWriter.toString('hex'),
         sequence: 0xffffffff,
       },
     ],
     vout: [
       {
         value: BLOCK_REWARD,
-        scriptPubKey: {
-          addresses: [minerAddress],
-        },
+        scriptPubKey: `OP_DUP OP_HASH160 ${minerAddress} OP_EQUALVERIFY OP_CHECKSIG`,
       },
     ],
   };
+  return transaction;
 }
 
-function isValidTransaction(transaction) {
-  // Check if the transaction has a valid structure
-  if (!transaction.txid || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
-    return false;
-  }
-  // Check if the transaction inputs and outputs are valid
-  const totalInput = transaction.vin.reduce((sum, input) => sum + (input.value || 0), 0);
-  const totalOutput = transaction.vout.reduce((sum, output) => sum + output.value, 0);
-  if (totalInput !== totalOutput) {
-    return false;
-  }
-  return true;
+function serializeCoinbaseTransaction(coinbaseTransaction) {
+  return JSON.stringify(coinbaseTransaction);
 }
 
-function calculateTransactionFee(transaction) {
-  const totalInput = transaction.vin.reduce((sum, input) => sum + (input.value || 0), 0);
-  const totalOutput = transaction.vout.reduce((sum, output) => sum + output.value, 0);
-  return totalInput - totalOutput;
-}
-
-function mineBlock(transactions, blockHeight, minerAddress) {
-  const coinbaseTransaction = createCoinbaseTransaction(blockHeight, minerAddress);
-  const validTransactions = transactions.filter(isValidTransaction);
-  // Calculating total fee collected (including coinbase transaction)
-  const totalFee = validTransactions.reduce((sum, tx) => sum + calculateTransactionFee(tx), 0) + BLOCK_REWARD;
-
-  let blockTransactions = [coinbaseTransaction];
-  let blockSize = Buffer.from(JSON.stringify(coinbaseTransaction), 'utf8').length;
-  for (const tx of validTransactions) {
-    const txSize = Buffer.from(JSON.stringify(tx), 'utf8').length;
-    if (blockSize + txSize <= MAX_BLOCK_SIZE) {
-      blockTransactions.push(tx);
-      blockSize += txSize;
-    } else {
-      break;
-    }
-  }
-
-  // Create the block header
-  const merkleRoot = calculateMerkleRoot(blockTransactions.map(tx => tx.txid));
-  const timestamp = Math.floor(Date.now() / 1000);
-  let nonce = 0;
-  let blockHeader = '';
-  let blockHash = '';
-  while (true) {
-    blockHeader = calculateBlockHeader(blockHeight, merkleRoot, timestamp, nonce);
-    blockHash = calculateHash(blockHeader);
-    if (blockHash < DIFFICULTY_TARGET) {
-      break;
-    }
-    nonce++;
-  }
-
-  return {
-    blockHeader,
-    coinbaseTransaction: JSON.stringify(coinbaseTransaction),
-    transactionIds: blockTransactions.map((tx) => tx.txid),
-    totalFee,
-    blockSize,
+function createBlockHeader(version, previousBlockHash, merkleRoot, timestamp, bits, nonce) {
+  const blockHeader = {
+    version,
+    previousBlockHash,
+    merkleRoot,
+    timestamp,
+    bits,
+    nonce,
   };
+  return blockHeader;
 }
 
-function calculateMerkleRoot(transactionIds) {
-  if (transactionIds.length === 0) {
-    return '0'.repeat(64);
+function serializeBlockHeader(blockHeader) {
+  return JSON.stringify(blockHeader);
+}
+
+function calculateBlockHash(blockHeader) {
+  const serializedHeader = serializeBlockHeader(blockHeader);
+  const hash = crypto.createHash('sha256').update(serializedHeader).digest('hex');
+  return hash;
+}
+
+function mineBlock(blockHeader, difficulty) {
+  let nonce = 0;
+  let hash = calculateBlockHash(blockHeader);
+
+  while (hash >= difficulty) {
+    nonce++;
+    blockHeader.nonce = nonce;
+    hash = calculateBlockHash(blockHeader);
   }
-  if (transactionIds.length === 1) {
-    return transactionIds[0];
-  }
 
-  const combinedIds = [];
-  for (let i = 0; i < transactionIds.length; i += 2) {
-    const leftId = transactionIds[i];
-    const rightId = i + 1 < transactionIds.length ? transactionIds[i + 1] : leftId;
-    combinedIds.push(calculateHash(leftId + rightId));
-  }
-  return calculateMerkleRoot(combinedIds);
+  return blockHeader;
 }
 
-function calculateBlockHeader(blockHeight, merkleRoot, timestamp, nonce) {
-
-  const formattedBlockHeight = blockHeight.toString().padStart(8, '0');
-  const formattedTimestamp = timestamp.toString().padStart(16, '0');
-  const formattedNonce = nonce.toString().padStart(16, '0');
-
-
-  return `${formattedBlockHeight}|${merkleRoot}|${formattedTimestamp}|${DIFFICULTY_TARGET}|${formattedNonce}`;
+function writeTxidsToFile(txids) {
+  const outputFile = 'output.txt';
+  const content = txids.join('\n');
+  fs.writeFileSync(outputFile, content);
 }
 
+// Main script flow
+const transactions = readTransactionsFromMempool();
+const validTransactions = transactions.filter(validateTransaction);
 
-function readTransactionsFromMempool() {
-  const transactionFiles = fs.readdirSync(MEMPOOL_PATH);
-  const transactions = transactionFiles.map((file) => {
-    const transactionData = fs.readFileSync(`${MEMPOOL_PATH}/${file}`, 'utf8');
-    return JSON.parse(transactionData);
-  });
-  return transactions;
-}
+const coinbaseTransaction = createCoinbaseTransaction(1, 'minerAddress');
+const serializedCoinbaseTransaction = serializeCoinbaseTransaction(coinbaseTransaction);
 
-function main() {
-  const transactions = readTransactionsFromMempool();
-  const minedBlock = mineBlock(transactions, BLOCK_HEIGHT, MINER_ADDRESS);
-  const outputContent = `${minedBlock.blockHeader}\n${minedBlock.coinbaseTransaction}\n${minedBlock.transactionIds.join('\n')}`;
-  fs.writeFileSync(OUTPUT_FILE, outputContent);
-  console.log('Block mined successfully!');
-  console.log(`Total fee collected: ${minedBlock.totalFee}`);
-  console.log(`Block size: ${minedBlock.blockSize} bytes`);
-  console.log(`Available block space: ${MAX_BLOCK_SIZE} bytes`);
-  console.log(`Block space utilized: ${((minedBlock.blockSize / MAX_BLOCK_SIZE) * 100).toFixed(2)}%`);
-}
+const blockHeader = createBlockHeader(1, '0'.repeat(64), 'merkleRoot', Date.now(), DIFFICULTY_TARGET, 0);
+const minedBlockHeader = mineBlock(blockHeader, DIFFICULTY_TARGET);
+const serializedBlockHeader = serializeBlockHeader(minedBlockHeader);
 
-main();
+const txids = [serializedCoinbaseTransaction, ...validTransactions.map(tx => tx.txid)];
+writeTxidsToFile([serializedBlockHeader, ...txids]);
+
+console.log('Block mined successfully!');
