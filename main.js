@@ -15,13 +15,18 @@ function readTransactionsFromMempool() {
   return transactions;
 }
 
-function verifySignature(input, transaction) {
-  const { scriptSig } = input;
-  const { scriptPubKey } = input.prevout;
-  const message = Buffer.from(transaction.txid, 'hex');
-  const signature = Buffer.from(scriptSig, 'hex');
-  const publicKey = Buffer.from(scriptPubKey.slice(2), 'hex');
-  return secp256k1.ecdsaVerify(signature, message, publicKey);
+function verifySignature(transaction) {
+  for (const input of transaction.vin) {
+    const { scriptSig, txid, vout } = input;
+    const { scriptPubKey } = input.prevout;
+    const message = Buffer.from(txid, 'hex');
+    const signature = Buffer.from(scriptSig, 'hex');
+    const publicKey = Buffer.from(scriptPubKey.slice(2), 'hex');
+    if (!secp256k1.ecdsaVerify(signature, message, publicKey)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function validateTransaction(transaction) {
@@ -45,10 +50,8 @@ function validateTransaction(transaction) {
   }
 
   // Verify input signatures
-  for (const input of transaction.vin) {
-    if (!verifySignature(input, transaction)) {
-      return false;
-    }
+  if (!verifySignature(transaction)) {
+    return false;
   }
 
   return true;
@@ -87,8 +90,7 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 
 function serializeTransaction(transaction) {
   const validInputs = transaction.vin.filter(input => input.txid && input.vout !== undefined);
-  const outputSize = transaction.vout.reduce((size, output) => size + 8, 0);
-  const buffer = Buffer.alloc(4 + 1 + validInputs.length * 36 + 1 + outputSize);
+  const buffer = Buffer.alloc(4 + 1 + validInputs.length * 41 + 1 + transaction.vout.length * 31);
   let offset = 0;
 
   // Write version
@@ -105,6 +107,20 @@ function serializeTransaction(transaction) {
     offset += 32;
     buffer.writeUInt32LE(input.vout, offset);
     offset += 4;
+    
+    if (input.scriptSig) {
+      const scriptSig = Buffer.from(input.scriptSig, 'hex');
+      buffer.writeUInt8(scriptSig.length, offset);
+      offset += 1;
+      scriptSig.copy(buffer, offset);
+      offset += scriptSig.length;
+    } else {
+      buffer.writeUInt8(0, offset);
+      offset += 1;
+    }
+    
+    buffer.writeUInt32LE(input.sequence, offset);
+    offset += 4;
   }
 
   // Write number of outputs
@@ -118,6 +134,17 @@ function serializeTransaction(transaction) {
       offset += 8;
     } else {
       throw new Error('Invalid transaction output: missing value');
+    }
+    
+    if (output.scriptPubKey && output.scriptPubKey.hex) {
+      const scriptPubKey = Buffer.from(output.scriptPubKey.hex, 'hex');
+      buffer.writeUInt8(scriptPubKey.length, offset);
+      offset += 1;
+      scriptPubKey.copy(buffer, offset);
+      offset += scriptPubKey.length;
+    } else {
+      buffer.writeUInt8(0, offset);
+      offset += 1;
     }
   }
 
