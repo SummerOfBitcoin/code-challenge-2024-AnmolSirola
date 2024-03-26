@@ -89,24 +89,34 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 }
 
 function serializeTransaction(transaction) {
-  const validInputs = transaction.vin.filter(input => input.txid && input.vout !== undefined);
-  const buffer = Buffer.alloc(4 + 1 + validInputs.length * 41 + 1 + transaction.vout.length * 31);
+  const buffer = Buffer.alloc(4 + 1 + transaction.vin.length * 41 + 1 + transaction.vout.length * 31);
   let offset = 0;
 
   // Write version
   buffer.writeUInt32LE(transaction.version, offset);
   offset += 4;
 
-  // Write number of valid inputs
-  buffer.writeUInt8(validInputs.length, offset);
+  // Write number of inputs
+  buffer.writeUInt8(transaction.vin.length, offset);
   offset += 1;
 
-  // Write valid inputs
-  for (const input of validInputs) {
-    Buffer.from(input.txid, 'hex').copy(buffer, offset);
-    offset += 32;
-    buffer.writeUInt32LE(input.vout, offset);
-    offset += 4;
+  // Write inputs
+  for (const input of transaction.vin) {
+    if (input.txid) {
+      Buffer.from(input.txid, 'hex').copy(buffer, offset);
+      offset += 32;
+    } else {
+      buffer.fill(0, offset, offset + 32);
+      offset += 32;
+    }
+    
+    if (input.vout !== undefined) {
+      buffer.writeUInt32LE(input.vout, offset);
+      offset += 4;
+    } else {
+      buffer.writeUInt32LE(0xffffffff, offset);
+      offset += 4;
+    }
     
     if (input.scriptSig) {
       const scriptSig = Buffer.from(input.scriptSig, 'hex');
@@ -133,7 +143,8 @@ function serializeTransaction(transaction) {
       buffer.writeBigInt64LE(BigInt(output.value), offset);
       offset += 8;
     } else {
-      throw new Error('Invalid transaction output: missing value');
+      buffer.writeBigInt64LE(BigInt(0), offset);
+      offset += 8;
     }
     
     if (output.scriptPubKey && output.scriptPubKey.hex) {
