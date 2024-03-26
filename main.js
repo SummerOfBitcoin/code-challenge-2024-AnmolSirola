@@ -15,12 +15,12 @@ function readTransactionsFromMempool() {
   return transactions;
 }
 
-function verifySignature(input) {
-  const { scriptSig, txid, vout } = input;
-  const { scriptPubKey } = vout;
-  const message = Buffer.from(txid, 'hex');
+function verifySignature(input, transaction) {
+  const { scriptSig } = input;
+  const { scriptPubKey } = input.prevout;
+  const message = Buffer.from(transaction.txid, 'hex');
   const signature = Buffer.from(scriptSig, 'hex');
-  const publicKey = Buffer.from(scriptPubKey, 'hex');
+  const publicKey = Buffer.from(scriptPubKey.slice(2), 'hex');
   return secp256k1.ecdsaVerify(signature, message, publicKey);
 }
 
@@ -44,8 +44,9 @@ function validateTransaction(transaction) {
     }
   }
 
+  // Verify input signatures
   for (const input of transaction.vin) {
-    if (!verifySignature(input)) {
+    if (!verifySignature(input, transaction)) {
       return false;
     }
   }
