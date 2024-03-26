@@ -15,8 +15,9 @@ function readTransactionsFromMempool() {
   return transactions;
 }
 
-function verifySignature(input, txid) {
-  const { scriptSig, scriptPubKey } = input;
+function verifySignature(input) {
+  const { scriptSig, txid, vout } = input;
+  const { scriptPubKey } = vout;
   const message = Buffer.from(txid, 'hex');
   const signature = Buffer.from(scriptSig, 'hex');
   const publicKey = Buffer.from(scriptPubKey, 'hex');
@@ -24,25 +25,27 @@ function verifySignature(input, txid) {
 }
 
 function validateTransaction(transaction) {
+  // Check transaction structure
   if (!transaction.version || !Array.isArray(transaction.vin) || !Array.isArray(transaction.vout)) {
     return false;
   }
 
+  // Check transaction inputs
   for (const input of transaction.vin) {
     if (!input.txid || input.vout === undefined || !input.scriptSig || !input.sequence) {
       return false;
     }
   }
 
+  // Check transaction outputs
   for (const output of transaction.vout) {
     if (output.value === undefined || !output.scriptPubKey) {
       return false;
     }
   }
 
-  const txid = calculateTransactionHash(transaction);
   for (const input of transaction.vin) {
-    if (!verifySignature(input, txid)) {
+    if (!verifySignature(input)) {
       return false;
     }
   }
@@ -58,8 +61,10 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
     version: 1,
     vin: [
       {
-        txid: '0000000000000000000000000000000000000000000000000000000000000000',
-        vout: 0xffffffff,
+        prevout: {
+          hash: '0000000000000000000000000000000000000000000000000000000000000000',
+          index: 0xffffffff,
+        },
         scriptSig: coinbaseScript.toString('hex'),
         sequence: 0xffffffff,
       },
@@ -80,64 +85,42 @@ function createCoinbaseTransaction(blockHeight, minerAddress) {
 }
 
 function serializeTransaction(transaction) {
-  const inputSize = 32 + 4; 
-  const outputSize = 8; 
-
-  const bufferSize = 4 + 1 + transaction.vin.length * inputSize + 1 + transaction.vout.length * (outputSize + 1);
-  const buffer = Buffer.alloc(bufferSize);
+  const validInputs = transaction.vin.filter(input => input.txid && input.vout !== undefined);
+  const outputSize = transaction.vout.reduce((size, output) => size + 8, 0);
+  const buffer = Buffer.alloc(4 + 1 + validInputs.length * 36 + 1 + outputSize);
   let offset = 0;
 
+  // Write version
   buffer.writeUInt32LE(transaction.version, offset);
   offset += 4;
 
-  
-  buffer.writeUInt8(transaction.vin.length, offset);
+  // Write number of valid inputs
+  buffer.writeUInt8(validInputs.length, offset);
   offset += 1;
 
-  for (const input of transaction.vin) {
-    if (input.txid) {
-      Buffer.from(input.txid, 'hex').copy(buffer, offset);
-      offset += 32;
-    } else {
-      buffer.fill(0, offset, offset + 32); 
-      offset += 32;
-    }
-
-    if (input.vout !== undefined) {
-      buffer.writeUInt32LE(input.vout, offset);
-      offset += 4;
-    } else {
-      buffer.writeUInt32LE(0xffffffff, offset); 
-      offset += 4;
-    }
+  // Write valid inputs
+  for (const input of validInputs) {
+    Buffer.from(input.txid, 'hex').copy(buffer, offset);
+    offset += 32;
+    buffer.writeUInt32LE(input.vout, offset);
+    offset += 4;
   }
 
+  // Write number of outputs
   buffer.writeUInt8(transaction.vout.length, offset);
   offset += 1;
 
+  // Write outputs
   for (const output of transaction.vout) {
     if (output.value !== undefined) {
-      buffer.writeBigInt64LE(BigInt(Math.floor(output.value * 1e8)), offset);
+      buffer.writeBigInt64LE(BigInt(output.value), offset);
       offset += 8;
     } else {
-      buffer.writeBigInt64LE(BigInt(0), offset); 
-      offset += 8;
+      throw new Error('Invalid transaction output: missing value');
     }
-
-    const scriptPubKey = Buffer.from(output.scriptPubKey.hex, 'hex');
-    buffer.writeUInt8(scriptPubKey.length, offset);
-    offset += 1;
-    scriptPubKey.copy(buffer, offset);
-    offset += scriptPubKey.length;
   }
 
-  return buffer.slice(0, offset).toString('hex');
-}
-
-function calculateTransactionHash(transaction) {
-  const serializedTransaction = serializeTransaction(transaction);
-  const hash = crypto.createHash('sha256').update(Buffer.from(serializedTransaction, 'hex')).digest('hex');
-  return hash;
+  return buffer.toString('hex');
 }
 
 function createBlockHeader(version, previousBlockHash, merkleRoot, timestamp, bits, nonce) {
@@ -185,7 +168,7 @@ function mineBlock(blockHeader, difficulty) {
 }
 
 function calculateMerkleRoot(transactions) {
-  const txids = transactions.map(tx => calculateTransactionHash(tx));
+  const txids = transactions.map(tx => tx.txid);
 
   while (txids.length > 1) {
     const newTxids = [];
@@ -215,12 +198,17 @@ const transactions = readTransactionsFromMempool();
 const validTransactions = transactions.filter(validateTransaction);
 
 const coinbaseTransaction = createCoinbaseTransaction(1, '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa');
+coinbaseTransaction.txid = crypto.createHash('sha256').update(Buffer.from(serializeTransaction(coinbaseTransaction), 'hex')).digest('hex');
+
+validTransactions.forEach(tx => {
+  tx.txid = crypto.createHash('sha256').update(Buffer.from(serializeTransaction(tx), 'hex')).digest('hex');
+});
 
 const merkleRoot = calculateMerkleRoot([coinbaseTransaction, ...validTransactions]);
 const blockHeader = createBlockHeader(1, '0000000000000000000000000000000000000000000000000000000000000000', merkleRoot, Math.floor(Date.now() / 1000), DIFFICULTY_TARGET, 0);
 const minedBlockHeader = mineBlock(blockHeader, DIFFICULTY_TARGET);
 
-const txids = [calculateTransactionHash(coinbaseTransaction), ...validTransactions.map(tx => calculateTransactionHash(tx))];
+const txids = [coinbaseTransaction.txid, ...validTransactions.map(tx => tx.txid)];
 writeTxidsToFile(minedBlockHeader, coinbaseTransaction, txids);
 
 console.log('Block mined successfully!');
